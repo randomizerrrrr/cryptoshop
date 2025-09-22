@@ -1,0 +1,365 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// User model for marketplace participants
+model User {
+  id              String   @id @default(cuid())
+  username        String   @unique
+  email           String?  @unique
+  password        String?  // For authentication (hashed in production)
+  accessToken     String   @unique
+  bitcoinAddress  String?  // Bitcoin wallet address
+  twoFactorSecret String?
+  twoFactorEnabled Boolean @default(false)
+  isSeller        Boolean  @default(false)
+  isVerified      Boolean  @default(false)
+  isAdmin         Boolean  @default(false)  // Admin role flag
+  avatar          String?
+  lastLogin       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  sellerProfile   Seller?
+  orders          Order[]
+  reviews         Review[]
+  wallet          Wallet?
+  escrowTransactions EscrowTransaction[]
+  supportTickets  SupportTicket[]
+  messages        Message[]
+  escrowParticipants EscrowParticipant[]
+
+  @@map("users")
+}
+
+// Seller profile for users who want to sell products
+model Seller {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  storeName      String
+  description    String?
+  category       String
+  verificationStatus String? @default("pending") // pending, verified, rejected
+  rating         Float    @default(0)
+  reviewCount    Int      @default(0)
+  totalSales     Int      @default(0)
+  totalRevenue   Float    @default(0)
+  responseTime   String?  // e.g., "2 hours"
+  isOnline       Boolean  @default(false)
+  joinedAt       DateTime @default(now())
+  
+  // Relations
+  products       Product[]
+  reviews        Review[]
+  
+  @@map("sellers")
+}
+
+// Product model
+model Product {
+  id             String   @id @default(cuid())
+  sellerId       String
+  seller         Seller   @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  
+  name           String
+  description    String
+  priceBtc       Float
+  priceEur       Float
+  images         String   // JSON string array of image URLs
+  category       String
+  tags           String   // JSON string array of tags
+  inStock        Boolean  @default(true)
+  stockQuantity  Int      @default(1)
+  deliveryTime   String   // e.g., "Instant", "24 hours", "3-5 days"
+  digitalProduct Boolean  @default(true)
+  downloadUrl    String?  // For digital products
+  
+  // Statistics
+  viewCount      Int      @default(0)
+  salesCount     Int      @default(0)
+  rating         Float    @default(0)
+  reviewCount    Int      @default(0)
+  
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  
+  // Relations
+  orderItems     OrderItem[]
+  reviews        Review[]
+  specifications ProductSpecification[]
+  
+  @@map("products")
+}
+
+// Product specifications
+model ProductSpecification {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  key       String
+  value     String
+  
+  @@map("product_specifications")
+}
+
+// Order model
+model Order {
+  id            String      @id @default(cuid())
+  buyerId       String
+  buyer         User        @relation(fields: [buyerId], references: [id])
+  
+  status        OrderStatus @default(PENDING)
+  totalBtc      Float
+  totalEur      Float
+  paymentHash   String?     // Bitcoin payment hash
+  paymentConfirmed Boolean  @default(false)
+  
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  completedAt   DateTime?
+  
+  // Relations
+  orderItems    OrderItem[]
+  escrowTransaction EscrowTransaction?
+  reviews       Review[]
+  
+  @@map("orders")
+}
+
+// Order items
+model OrderItem {
+  id        String @id @default(cuid())
+  orderId   String
+  order     Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  
+  quantity  Int
+  priceBtc  Float
+  priceEur  Float
+  
+  createdAt DateTime @default(now())
+  
+  @@map("order_items")
+}
+
+// Escrow system for secure transactions
+model EscrowTransaction {
+  id              String            @id @default(cuid())
+  orderId         String            @unique
+  order           Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId          String?
+  user            User?             @relation(fields: [userId], references: [id])
+  
+  amountBtc       Float
+  amountEur       Float
+  status          EscrowStatus      @default(PENDING)
+  releaseCode     String?           // Code for releasing funds
+  disputeRaised   Boolean           @default(false)
+  disputeReason   String?
+  disputeResolved Boolean           @default(false)
+  
+  // Timeline
+  fundedAt        DateTime?
+  confirmedAt     DateTime?
+  releasedAt      DateTime?
+  refundedAt      DateTime?
+  
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  // Relations
+  participants    EscrowParticipant[]
+  
+  @@map("escrow_transactions")
+}
+
+// Escrow participants (buyer, seller, arbiter)
+model EscrowParticipant {
+  id                 String              @id @default(cuid())
+  escrowTransactionId String
+  escrowTransaction  EscrowTransaction   @relation(fields: [escrowTransactionId], references: [id], onDelete: Cascade)
+  userId             String
+  user               User                @relation(fields: [userId], references: [id])
+  role               EscrowParticipantRole
+  
+  agreedAt           DateTime?
+  
+  @@map("escrow_participants")
+}
+
+// Reviews and ratings
+model Review {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id])
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id])
+  sellerId  String?
+  seller    Seller?  @relation(fields: [sellerId], references: [id])
+  
+  rating    Int      // 1-5
+  content   String?
+  helpful   Int      @default(0)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([userId, productId])
+  @@unique([userId, orderId])
+  @@unique([userId, sellerId])
+  
+  @@map("reviews")
+}
+
+// Wallet system for users
+model Wallet {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  balanceBtc    Float    @default(0)
+  balanceEur    Float    @default(0)
+  address       String?  // Bitcoin address
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relations
+  transactions  WalletTransaction[]
+  
+  @@map("wallets")
+}
+
+// Wallet transactions
+model WalletTransaction {
+  id          String           @id @default(cuid())
+  walletId    String
+  wallet      Wallet           @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  
+  type        TransactionType
+  amountBtc   Float
+  amountEur   Float
+  description String?
+  hash        String?          // Transaction hash
+  status      TransactionStatus @default(PENDING)
+  
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  
+  @@map("wallet_transactions")
+}
+
+// Support ticket system
+model SupportTicket {
+  id          String           @id @default(cuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id])
+  
+  subject     String
+  content     String
+  status      TicketStatus     @default(OPEN)
+  priority    TicketPriority   @default(MEDIUM)
+  category    String
+  
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  resolvedAt  DateTime?
+  
+  // Relations
+  messages    Message[]
+  
+  @@map("support_tickets")
+}
+
+// Messages for support tickets
+model Message {
+  id          String   @id @default(cuid())
+  ticketId    String
+  ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  
+  content     String
+  isStaff     Boolean  @default(false)
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("messages")
+}
+
+// Enums
+enum OrderStatus {
+  PENDING
+  PAID
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum EscrowStatus {
+  PENDING
+  FUNDED
+  CONFIRMED
+  RELEASED
+  REFUNDED
+  DISPUTED
+}
+
+enum EscrowParticipantRole {
+  BUYER
+  SELLER
+  ARBITER
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  PAYMENT
+  REFUND
+  ESCROW_FUND
+  ESCROW_RELEASE
+  ESCROW_REFUND
+}
+
+enum TransactionStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  CANCELLED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
